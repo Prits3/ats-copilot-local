@@ -1,0 +1,18 @@
+[
+  {
+    "source": "manual",
+    "url": "",
+    "title": "Junior Data Analyst - Berlin",
+    "company_guess": "DataFlow GmbH",
+    "location_guess": "Berlin",
+    "description_text": "We are hiring a Junior Data Analyst in Berlin. Required: Python, SQL, dashboards, stakeholder reporting. Nice to have: dbt, Airflow, AWS."
+  },
+  {
+    "source": "manual",
+    "url": "",
+    "title": "ML Engineer Intern",
+    "company_guess": "VisionStack",
+    "location_guess": "Remote",
+    "description_text": "Looking for ML engineering intern with Python, PyTorch, APIs, and strong experimentation mindset."
+  }
+]

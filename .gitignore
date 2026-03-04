@@ -1,0 +1,43 @@
+# Python bytecode / caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# OS / editor files
+.DS_Store
+.idea/
+.vscode/
+
+# Local app/runtime artifacts
+*.log
+*.tmp
+*.sqlite3
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Local vector stores / model artifacts
+.chroma_local/
+chroma/
+project/.chroma_local/
+
+# Exported/generated outputs
+*.csv
+*.tsv
+*.parquet
+*.feather
+*.txt
