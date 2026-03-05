@@ -1,3 +1,10 @@
+# ATS Copilot (RAG Resume Analyzer)
+
+Live Demo:
+https://prits3-ats-copilot-local.streamlit.app
+
+AI-powered ATS Copilot that ranks candidate CVs against job descriptions using RAG and semantic search.
+
 # Berlin Startup Job Hunter + CV Tailor + ATS Score
 
 Streamlit app that:
@@ -44,3 +51,5 @@ It does not target restricted job boards (LinkedIn, Indeed, Glassdoor, StepStone
 - `profile.py` - CV extraction/redaction/profile build
 - `matcher.py` - embeddings + ranking + retrieval
 - `cv_advisor.py` - ATS score + missing skills + guidance
+
+
