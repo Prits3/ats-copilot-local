@@ -32,8 +32,12 @@ This repo is deployable on Streamlit Community Cloud.
 1. Push this repo to GitHub.
 2. Go to Streamlit Community Cloud -> New app.
 3. Select repo + branch `main`.
-4. Main file path: `app.py`.
+4. Main file path: `app.py` (root-level file).
 5. Deploy.
+
+### Important: main file path
+- Use `app.py` as the Streamlit main file path.
+- This repo also contains `project/app.py`, which is an older scaffold and should not be used for deployment.
 
 ## Notes on LLM (Ollama)
 - The app works without Ollama.
@@ -51,5 +55,4 @@ It does not target restricted job boards (LinkedIn, Indeed, Glassdoor, StepStone
 - `profile.py` - CV extraction/redaction/profile build
 - `matcher.py` - embeddings + ranking + retrieval
 - `cv_advisor.py` - ATS score + missing skills + guidance
-
 
