@@ -1,3 +1,9 @@
 streamlit
 pypdf
 pandas
+requests
+beautifulsoup4
+sentence-transformers
+numpy
+chromadb
+faiss-cpu
