@@ -22,12 +22,44 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 from bullet_rewriter import holistic_cv_rewrite
 from cv_advisor import ats_score, detailed_ats_suggestions, missing_skills
 from cv_generator import generate_pdf_bytes
 from jd_analyzer import analyze_jd, extract_master_profile_from_cv, sanitize_profile
 from llm_client import make_llm_fn
 from relevance_engine import filter_skills, rank_experiences, rank_projects
+
+
+def _profile_to_cv_text(profile: dict) -> str:
+    """Flatten a structured profile dict to plain text for cv_advisor functions."""
+    parts = []
+    personal = profile.get("personal", {})
+    for field in ("name", "email", "phone", "linkedin", "github", "location"):
+        val = personal.get(field, "")
+        if val:
+            parts.append(val)
+    for role in profile.get("roles", []):
+        parts.append(f"{role.get('title', '')} {role.get('company', '')}")
+        parts.extend(role.get("bullets", []))
+        parts.extend(role.get("skills", []))
+    for proj in profile.get("projects", []):
+        parts.append(proj.get("name", ""))
+        parts.append(proj.get("description", ""))
+        parts.extend(proj.get("bullets", []))
+        parts.extend(proj.get("skills", []))
+    for edu in profile.get("education", []):
+        parts.append(f"{edu.get('degree', '')} {edu.get('field', '')} {edu.get('institution', '')}")
+    skills = profile.get("skills", {})
+    for skill_list in skills.values():
+        if isinstance(skill_list, list):
+            parts.extend(skill_list)
+    parts.extend(profile.get("achievements", []))
+    parts.extend(profile.get("certifications", []))
+    return "\n".join(p for p in parts if p)
 
 # ── App setup ─────────────────────────────────────────────────────────────────
 
@@ -46,13 +78,14 @@ app.add_middleware(
 
 # ── LLM helpers ───────────────────────────────────────────────────────────────
 
-def _get_llm_fn(provider: str = "openai", model: Optional[str] = None):
-    """Return an LLM callable. Raises 503 if OpenAI key is missing."""
+def _get_llm_fn(provider: str = "gemini", model: Optional[str] = None):
+    """Return an LLM callable. Raises 503 if the required API key is missing."""
     if provider == "openai" and not os.environ.get("OPENAI_API_KEY"):
-        raise HTTPException(
-            status_code=503,
-            detail="OPENAI_API_KEY not set. Set the env var and restart.",
-        )
+        raise HTTPException(status_code=503, detail="OPENAI_API_KEY not set.")
+    if provider == "gemini" and not os.environ.get("GEMINI_API_KEY"):
+        raise HTTPException(status_code=503, detail="GEMINI_API_KEY not set.")
+    if provider == "groq" and not os.environ.get("GROQ_API_KEY"):
+        raise HTTPException(status_code=503, detail="GROQ_API_KEY not set.")
     return make_llm_fn(provider=provider, model=model)
 
 
@@ -168,9 +201,10 @@ def optimize_endpoint(req: OptimizeRequest):
             diff_pairs = rewrite_result.get("diff_pairs", [])
 
     # ATS score
-    score = ats_score(profile, req.jd_text)
-    suggestions = detailed_ats_suggestions(profile, jd_analysis)
-    missing = missing_skills(profile, jd_analysis)
+    cv_text = _profile_to_cv_text(profile)
+    score = ats_score(cv_text, req.jd_text)
+    missing = missing_skills(req.jd_text, cv_text)
+    suggestions = detailed_ats_suggestions(score, cv_text)
 
     return {
         "jd_analysis": jd_analysis,
@@ -188,11 +222,10 @@ def optimize_endpoint(req: OptimizeRequest):
 @app.post("/ats-score")
 def ats_score_endpoint(req: AtsScoreRequest):
     """Return ATS match score and missing keywords for a profile vs. JD."""
-    score = ats_score(req.profile, req.jd_text)
-    fn = _get_llm_fn()
-    jd_analysis = analyze_jd(req.jd_text, fn)
-    missing = missing_skills(req.profile, jd_analysis)
-    suggestions = detailed_ats_suggestions(req.profile, jd_analysis)
+    cv_text = _profile_to_cv_text(req.profile)
+    score = ats_score(cv_text, req.jd_text)
+    missing = missing_skills(req.jd_text, cv_text)
+    suggestions = detailed_ats_suggestions(score, cv_text)
     return {
         "ats_score": score,
         "missing_skills": missing,

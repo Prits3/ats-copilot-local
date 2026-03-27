@@ -1,4 +1,4 @@
-"""Unified LLM client supporting Ollama (local) and OpenAI."""
+"""Unified LLM client supporting Ollama (local), OpenAI, and Google Gemini."""
 from __future__ import annotations
 
 import os
@@ -37,6 +37,26 @@ def _call_openai(prompt: str, model: str = "gpt-4o-mini") -> str:
     return resp.choices[0].message.content or ""
 
 
+def _call_groq(prompt: str, model: str = "llama-3.3-70b-versatile") -> str:
+    from groq import Groq  # type: ignore
+
+    client = Groq(api_key=os.environ["GROQ_API_KEY"])
+    resp = client.chat.completions.create(
+        model=model,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.3,
+    )
+    return resp.choices[0].message.content or ""
+
+
+def _call_gemini(prompt: str, model: str = "gemini-2.0-flash-lite") -> str:
+    from google import genai  # type: ignore
+
+    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+    resp = client.models.generate_content(model=model, contents=prompt)
+    return resp.text or ""
+
+
 def call_llm(
     prompt: str,
     provider: str = "ollama",
@@ -47,9 +67,14 @@ def call_llm(
     try:
         if provider == "openai":
             return _call_openai(prompt, model or "gpt-4o-mini")
+        if provider == "gemini":
+            return _call_gemini(prompt, model or "gemini-2.0-flash-lite")
+        if provider == "groq":
+            return _call_groq(prompt, model or "llama-3.3-70b-versatile")
         return _call_ollama(prompt, model or "mistral:7b", timeout=timeout)
-    except Exception:
-        return ""
+    except Exception as e:
+        print(f"[LLM ERROR] provider={provider} error={e}")
+        raise
 
 
 def make_llm_fn(provider: str = "ollama", model: Optional[str] = None):

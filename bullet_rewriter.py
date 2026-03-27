@@ -76,10 +76,11 @@ Job context (key skills/requirements): {jd_text[:400]}
 
 Rules:
 1. Start with a strong action verb — NOT "Responsible for", "Worked on", "Helped", "Assisted"
-2. Include or estimate measurable impact (numbers, %, scale, time saved, revenue)
-3. Keep it under 20 words — concise and specific
-4. Align wording with what matters for a {role_type.replace("_", " ")} role
-5. Remove all generic filler language
+2. Follow the format: [Action verb] + [what you did, with tools/methods] + [measurable result or impact]
+3. Use real numbers from the original where they exist; if none, describe scale/scope (e.g. "across 5 teams", "for 200+ users")
+4. 20–30 words — detailed enough to show real contribution, not a vague summary
+5. Align keywords with the target role naturally
+6. No filler: "various", "multiple", "several", "a number of"
 
 Return ONLY the rewritten bullet, no explanation, no bullet symbol."""
 
@@ -223,21 +224,23 @@ JOB DESCRIPTION (first 1200 chars):
 {jd_text[:1200]}
 
 REWRITE RULES:
-1. Each bullet: strong action verb + specific outcome/metric (use real numbers from original where available; do NOT invent metrics)
-2. Max 4 bullets per experience, 2 bullets per project
-3. Each bullet under 25 words — sharp and specific
-4. Remove all weak language: "responsible for", "worked on", "helped", "involved in"
-5. Tailor wording to match job description keywords naturally
-6. Summary: 2-3 tight sentences, no "I", no clichés, highlight overlap between candidate and role
+1. Each bullet: [Strong action verb] + [what was done, naming specific tools/methods/datasets] + [concrete result or scope]
+2. Use real numbers from the original where they exist; if none, describe scale or impact qualitatively (e.g. "across 3 business units", "reducing manual effort by half", "used by 50+ stakeholders")
+3. Do NOT invent specific percentages or dollar figures that aren't in the original
+4. Max 5 bullets per experience, 3 bullets per project — pick the most impactful
+5. Each bullet 20–35 words — specific enough to show real contribution, not a vague one-liner
+6. Remove all weak language: "responsible for", "worked on", "helped", "involved in", "assisted", "participated in"
+7. Tailor wording to match job description keywords naturally — mirror the JD's language where it fits
+8. Summary: 2-3 tight sentences, no "I", no clichés, name specific tools/domains the candidate has worked in
 
 Return ONLY valid JSON matching this exact schema:
 {{
   "summary": "2-3 sentence professional summary tailored to the role",
   "experiences": [
-    {{"id": "EXP_0", "bullets": ["bullet 1", "bullet 2", "bullet 3"]}}
+    {{"id": "EXP_0", "bullets": ["bullet 1", "bullet 2", "bullet 3", "bullet 4", "bullet 5"]}}
   ],
   "projects": [
-    {{"id": "PROJ_0", "bullets": ["bullet 1", "bullet 2"]}}
+    {{"id": "PROJ_0", "bullets": ["bullet 1", "bullet 2", "bullet 3"]}}
   ]
 }}"""
 
@@ -261,14 +264,14 @@ Return ONLY valid JSON matching this exact schema:
     for i, exp in enumerate(selected_experiences):
         new_exp = dict(exp)
         new_bullets = exp_map.get(f"EXP_{i}", exp.get("bullets", []))
-        new_exp["bullets"] = [b for b in new_bullets if b.strip()][:4] or exp.get("bullets", [])
+        new_exp["bullets"] = [b for b in new_bullets if b.strip()][:5] or exp.get("bullets", [])
         rewritten_exps.append(new_exp)
 
     rewritten_projs = []
     for i, proj in enumerate(selected_projects):
         new_proj = dict(proj)
         new_bullets = proj_map.get(f"PROJ_{i}", proj.get("bullets", []))
-        new_proj["bullets"] = [b for b in new_bullets if b.strip()][:2] or proj.get("bullets", [])
+        new_proj["bullets"] = [b for b in new_bullets if b.strip()][:3] or proj.get("bullets", [])
         rewritten_projs.append(new_proj)
 
     return {

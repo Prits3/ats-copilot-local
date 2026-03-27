@@ -6,6 +6,10 @@ import os
 import time
 from typing import Dict, List, Optional
 
+from dotenv import load_dotenv
+
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"), override=True)
+
 import pandas as pd
 import streamlit as st
 
@@ -139,8 +143,8 @@ def _init_state() -> None:
         "mode": None,           # None | "create" | "tailor" | "scan"
         # Shared
         "master_profile": None,
-        "llm_provider": "openai" if os.environ.get("OPENAI_API_KEY") else "ollama",
-        "llm_model": "gpt-4o-mini" if os.environ.get("OPENAI_API_KEY") else "mistral:7b",
+        "llm_provider": "openai" if os.environ.get("OPENAI_API_KEY") else ("groq" if os.environ.get("GROQ_API_KEY") else ("gemini" if os.environ.get("GEMINI_API_KEY") else "ollama")),
+        "llm_model": "gpt-4o-mini" if os.environ.get("OPENAI_API_KEY") else ("llama-3.3-70b-versatile" if os.environ.get("GROQ_API_KEY") else ("gemini-2.0-flash-lite" if os.environ.get("GEMINI_API_KEY") else "mistral:7b")),
         # Create CV
         "create_personal": {},
         "create_roles": [_empty_role()],
@@ -214,6 +218,10 @@ def _llm_available() -> bool:
     provider = st.session_state.get("llm_provider", "ollama")
     if provider == "openai":
         return bool(os.environ.get("OPENAI_API_KEY"))
+    if provider == "gemini":
+        return bool(os.environ.get("GEMINI_API_KEY"))
+    if provider == "groq":
+        return bool(os.environ.get("GROQ_API_KEY"))
     return cached_ollama_check(st.session_state.get("llm_model", "mistral:7b"))
 
 
@@ -497,7 +505,8 @@ def _profile_from_cv_text(cv_text: str) -> Optional[dict]:
             and not l.isupper()
             and not l.endswith(":")
         ]
-        bullets = [l.lstrip("•·▪▸➤›-–—* ").strip() for l in body_lines[:12]]
+        raw_bullets = [l.lstrip("•·▪▸➤›-–—* ").strip() for l in body_lines[:12]]
+        bullets = [" ".join(b.split()[:20]) for b in raw_bullets if b]
         roles = [{
             "id": "role_1",
             "title": "See CV — please review and edit",
@@ -542,19 +551,29 @@ def _show_homepage():
     # LLM status (top right via sidebar)
     with st.sidebar:
         st.subheader("Settings")
-        provider_options = ["openai", "ollama"]
+        provider_options = ["groq", "gemini", "openai", "ollama"]
         st.selectbox("LLM Provider", provider_options, key="llm_provider")
         st.text_input("Model", key="llm_model")
-        provider = st.session_state.get("llm_provider", "ollama")
+        provider = st.session_state.get("llm_provider", "groq")
         model = st.session_state.get("llm_model", "")
         if provider == "openai":
             if os.environ.get("OPENAI_API_KEY"):
                 st.success(f"OpenAI ready ({model or 'gpt-4o-mini'})")
             else:
-                st.error("OPENAI_API_KEY not set — run: export OPENAI_API_KEY=sk-...")
+                st.error("OPENAI_API_KEY not set — add it to .env")
+        elif provider == "gemini":
+            if os.environ.get("GEMINI_API_KEY"):
+                st.success(f"Gemini ready ({model or 'gemini-2.0-flash-lite'})")
+            else:
+                st.error("GEMINI_API_KEY not set — add it to .env")
+        elif provider == "groq":
+            if os.environ.get("GROQ_API_KEY"):
+                st.success(f"Groq ready ({model or 'llama-3.3-70b-versatile'})")
+            else:
+                st.error("GROQ_API_KEY not set — add it to .env")
         else:
             ok = cached_ollama_check(model or "mistral:7b")
-            st.success("Ollama connected") if ok else st.warning("Ollama not running — switch to OpenAI")
+            st.success("Ollama connected") if ok else st.warning("Ollama not running — switch to Groq")
 
     # Hero
     st.markdown("<br>", unsafe_allow_html=True)
@@ -957,6 +976,32 @@ def _show_tailor_cv():
     st.title("🎯 Tailor CV to a Job")
     st.caption("Paste a job description — AI rewrites your CV for that specific role, optimized for ATS.")
 
+    with st.sidebar:
+        st.subheader("Settings")
+        provider_options = ["groq", "gemini", "openai", "ollama"]
+        st.selectbox("LLM Provider", provider_options, key="llm_provider")
+        st.text_input("Model", key="llm_model")
+        provider = st.session_state.get("llm_provider", "groq")
+        model = st.session_state.get("llm_model", "")
+        if provider == "openai":
+            if os.environ.get("OPENAI_API_KEY"):
+                st.success(f"OpenAI ready ({model or 'gpt-4o-mini'})")
+            else:
+                st.error("OPENAI_API_KEY not set — add it to .env")
+        elif provider == "gemini":
+            if os.environ.get("GEMINI_API_KEY"):
+                st.success(f"Gemini ready ({model or 'gemini-2.0-flash-lite'})")
+            else:
+                st.error("GEMINI_API_KEY not set — add it to .env")
+        elif provider == "groq":
+            if os.environ.get("GROQ_API_KEY"):
+                st.success(f"Groq ready ({model or 'llama-3.3-70b-versatile'})")
+            else:
+                st.error("GROQ_API_KEY not set — add it to .env")
+        else:
+            ok = cached_ollama_check(model or "mistral:7b")
+            st.success("Ollama connected") if ok else st.warning("Ollama not running — switch to Groq")
+
     def _on_jd_change():
         pass  # auto-detect is handled at render time when "🔍 Auto-detect from JD" is selected
 
@@ -974,32 +1019,55 @@ def _show_tailor_cv():
         )
 
         st.subheader("Your CV")
-        cv_source_options = ["Use saved profile"]
-        if st.session_state.get("master_profile"):
-            cv_source_options = ["Use saved profile"] + ["Upload a different CV (PDF)"]
-        else:
-            cv_source_options = ["Upload CV (PDF)", "Load profile template"]
-
-        cv_source = st.selectbox("CV source", cv_source_options)
+        def _is_bad_profile(p: dict) -> bool:
+            """True if the profile is the regex fallback placeholder."""
+            roles = p.get("roles", []) if p else []
+            return not p or (len(roles) == 1 and "see cv" in (roles[0].get("title") or "").lower())
 
         profile = st.session_state.get("master_profile")
 
-        if cv_source == "Upload CV (PDF)" or cv_source == "Upload a different CV (PDF)":
+        # Always force re-upload if the cached profile is the fallback placeholder
+        if _is_bad_profile(profile):
+            st.session_state["master_profile"] = None
+            profile = None
+
+        st.subheader("Your CV")
+        cv_source_options = ["Upload CV (PDF)"]
+        if profile:
+            cv_source_options = ["Use saved profile", "Upload a different CV (PDF)"]
+
+        cv_source = st.selectbox("CV source", cv_source_options)
+
+        if cv_source in ("Upload CV (PDF)", "Upload a different CV (PDF)"):
             cv_file = st.file_uploader("Upload CV PDF", type=["pdf"], key="tailor_pdf")
             if cv_file:
-                st.session_state["tailor_cv_pdf_bytes"] = cv_file.getvalue()
-                profile = None  # will extract below
-        elif cv_source == "Load profile template":
-            if st.button("Load Template"):
-                try:
-                    with open("master_profile_template.json") as f:
-                        st.session_state["master_profile"] = json.load(f)
-                    profile = st.session_state["master_profile"]
-                    st.success("Template loaded!")
-                except FileNotFoundError:
-                    st.error("Template file not found.")
+                new_bytes = cv_file.getvalue()
+                if new_bytes != st.session_state.get("tailor_cv_pdf_bytes"):
+                    # New file — clear old profile and extract fresh
+                    st.session_state["tailor_cv_pdf_bytes"] = new_bytes
+                    st.session_state["master_profile"] = None
+                    profile = None
 
-        if profile:
+                if not profile:
+                    with st.spinner("Extracting your profile from PDF…"):
+                        pages = cached_extract_pdf_pages(st.session_state["tailor_cv_pdf_bytes"])
+                        cv_text = "\n".join(pages)
+                        try:
+                            extracted = extract_master_profile_from_cv(cv_text, _llm_fn())
+                        except Exception as llm_err:
+                            extracted = None
+                            st.error(f"LLM error: {llm_err}")
+                        if extracted and not _is_bad_profile(extracted):
+                            extracted = sanitize_profile(extracted)
+                            st.session_state["master_profile"] = extracted
+                            profile = extracted
+                        else:
+                            st.error(
+                                "Could not extract your profile automatically. "
+                                "Check that **Gemini** is selected and shows **ready** in the sidebar, then re-upload."
+                            )
+
+        if profile and not _is_bad_profile(profile):
             personal = profile.get("personal", {})
             st.success(
                 f"Using: **{personal.get('name', 'Your profile')}** — "
@@ -1035,34 +1103,9 @@ def _show_tailor_cv():
             with col_output:
                 st.error("Paste a job description first.")
         else:
-            # Extract profile from PDF if needed
-            if not profile and st.session_state.get("tailor_cv_pdf_bytes"):
-                with st.spinner("Extracting profile from PDF..."):
-                    pages = cached_extract_pdf_pages(st.session_state["tailor_cv_pdf_bytes"])
-                    cv_text = "\n".join(pages)
-                    # Try LLM extraction first, fall back to regex-based extraction
-                    extracted = extract_master_profile_from_cv(cv_text, _llm_fn())
-                    if not extracted:
-                        st.warning(
-                            "⚠️ LLM extraction failed — attempting regex parse. "
-                            "For best results, use the **Profile Builder** tab to enter your details manually.",
-                            icon=None,
-                        )
-                        extracted = _profile_from_cv_text(cv_text)
-                    if not extracted:
-                        with col_output:
-                            st.error(
-                                "Could not parse your CV automatically. "
-                                "Please use the **Profile Builder** tab to enter your details manually."
-                            )
-                        st.stop()
-                    extracted = sanitize_profile(extracted)
-                    profile = extracted
-                    st.session_state["master_profile"] = extracted
-
-            if not profile:
+            if not profile or _is_bad_profile(profile):
                 with col_output:
-                    st.error("No CV loaded. Upload a PDF or create your profile first.")
+                    st.error("No valid CV loaded. Upload your PDF above — make sure Gemini shows **ready** in the sidebar first.")
                 st.stop()
 
             # Always sanitize at generation time — even cached profiles may be stale

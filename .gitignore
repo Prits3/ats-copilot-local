@@ -29,7 +29,8 @@ htmlcov/
 *.tmp
 *.sqlite3
 
-# Streamlit
+# Secrets
+.env
 .streamlit/secrets.toml
 
 # Local vector stores / model artifacts
