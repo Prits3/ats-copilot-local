@@ -17,8 +17,8 @@ import streamlit as st
 # (which uses os.environ) works both locally and on Streamlit Cloud.
 try:
     for _k, _v in st.secrets.items():
-        if isinstance(_v, str):
-            os.environ.setdefault(_k, _v)
+        if isinstance(_v, str) and _v:
+            os.environ[_k] = _v
 except Exception:
     pass
 
