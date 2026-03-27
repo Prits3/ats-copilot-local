@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait, FIRST_COMPLETED
 from typing import Dict, List
 from urllib.parse import urljoin, urlparse
 
@@ -30,7 +31,7 @@ def is_blocked_url(url: str) -> bool:
     return any(host == d or host.endswith(f".{d}") for d in BLOCKED_DOMAINS)
 
 
-def _fetch(url: str, timeout: int = 8) -> requests.Response:
+def _fetch(url: str, timeout: int = 5) -> requests.Response:
     r = requests.get(url, headers=HEADERS, timeout=timeout)
     r.raise_for_status()
     return r
@@ -185,83 +186,91 @@ def fetch_job_detail(job_url: str, title_hint: str = "Unknown Role", timeout: in
         }
 
 
+def _scan_one_company(company: Dict, max_jobs: int, deadline: float) -> List[Dict]:
+    """Fetch jobs for a single company. Returns list of job dicts."""
+    if time.time() > deadline:
+        return []
+    name = company.get("name", "Unknown")
+    location = company.get("location", "Berlin")
+    careers_url = company.get("careers_url", "")
+    if not careers_url or not careers_url.startswith("http") or is_blocked_url(careers_url):
+        return []
+
+    # Fast path: Greenhouse / Lever JSON APIs
+    ats_jobs = _scan_greenhouse_json(careers_url) + _scan_lever_json(careers_url)
+    if ats_jobs:
+        out = []
+        for aj in ats_jobs[:max_jobs]:
+            out.append({
+                "source": aj.get("source", "ats_api"),
+                "url": aj.get("url", careers_url),
+                "title": aj.get("title", "Unknown Role"),
+                "company_guess": name,
+                "location_guess": aj.get("location", location) or location,
+                "description_text": aj.get("description_text", ""),
+                "error": "",
+            })
+        return out
+
+    # Slow path: scrape careers page then each job link
+    try:
+        remaining = max(1, int(deadline - time.time()))
+        r = _fetch(careers_url, timeout=min(5, remaining))
+        links = _extract_job_links_from_careers_page(careers_url, r.text, limit=max_jobs)
+    except Exception:
+        return []
+
+    out = []
+    with ThreadPoolExecutor(max_workers=min(len(links), 6)) as pool:
+        futs = {
+            pool.submit(fetch_job_detail, lk["url"], lk["title_hint"], 5): lk
+            for lk in links
+            if time.time() < deadline
+        }
+        for fut in as_completed(futs, timeout=max(1, deadline - time.time())):
+            try:
+                detail = fut.result()
+                out.append({
+                    "source": "career_page",
+                    "url": detail["url"],
+                    "title": detail["title"],
+                    "company_guess": name,
+                    "location_guess": detail["location_guess"] or location,
+                    "description_text": detail["description_text"],
+                    "error": detail["error"],
+                })
+            except Exception:
+                pass
+    return out
+
+
 def scan_company_jobs(
     companies: List[Dict],
-    delay_s: float = 0.2,
-    max_jobs_per_company: int = 8,
+    delay_s: float = 0.0,
+    max_jobs_per_company: int = 6,
     max_total_jobs: int = 120,
-    hard_timeout_s: int = 90,
+    hard_timeout_s: int = 12,
 ) -> List[Dict]:
+    deadline = time.time() + hard_timeout_s
     jobs: List[Dict] = []
-    started = time.time()
-    for i, company in enumerate(companies):
-        if (time.time() - started) > hard_timeout_s:
-            break
-        if len(jobs) >= max_total_jobs:
-            break
-        name = company.get("name", "Unknown")
-        location = company.get("location", "Berlin")
-        careers_url = company.get("careers_url", "")
-        if not careers_url:
-            continue
-        if not careers_url.startswith("http"):
-            continue
-        if is_blocked_url(careers_url):
-            continue
 
-        ats_jobs = _scan_greenhouse_json(careers_url) + _scan_lever_json(careers_url)
-        if ats_jobs:
-            for aj in ats_jobs[:max_jobs_per_company]:
-                if len(jobs) >= max_total_jobs:
-                    break
-                jobs.append(
-                    {
-                        "source": aj.get("source", "ats_api"),
-                        "url": aj.get("url", careers_url),
-                        "title": aj.get("title", "Unknown Role"),
-                        "company_guess": name,
-                        "location_guess": aj.get("location", location) or location,
-                        "description_text": aj.get("description_text", ""),
-                        "error": "",
-                    }
-                )
-            if i < len(companies) - 1:
-                time.sleep(delay_s)
-            continue
+    valid = [
+        c for c in companies
+        if c.get("careers_url", "").startswith("http") and not is_blocked_url(c.get("careers_url", ""))
+    ]
 
-        try:
-            r = _fetch(careers_url, timeout=8)
-            links = _extract_job_links_from_careers_page(careers_url, r.text, limit=max_jobs_per_company)
-            for link in links:
-                if (time.time() - started) > hard_timeout_s:
-                    break
-                if len(jobs) >= max_total_jobs:
-                    break
-                detail = fetch_job_detail(link["url"], title_hint=link["title_hint"], timeout=8)
-                jobs.append(
-                    {
-                        "source": "career_page",
-                        "url": detail["url"],
-                        "title": detail["title"],
-                        "company_guess": name,
-                        "location_guess": detail["location_guess"] or location,
-                        "description_text": detail["description_text"],
-                        "error": detail["error"],
-                    }
-                )
-                time.sleep(delay_s)
-        except Exception as exc:  # noqa: BLE001
-            jobs.append(
-                {
-                    "source": "career_page",
-                    "url": careers_url,
-                    "title": "Fetch failed",
-                    "company_guess": name,
-                    "location_guess": location,
-                    "description_text": "",
-                    "error": str(exc),
-                }
-            )
-        if i < len(companies) - 1:
-            time.sleep(delay_s)
-    return jobs
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        futs = {
+            pool.submit(_scan_one_company, company, max_jobs_per_company, deadline): company
+            for company in valid
+        }
+        for fut in as_completed(futs, timeout=max(1, hard_timeout_s)):
+            if time.time() > deadline or len(jobs) >= max_total_jobs:
+                break
+            try:
+                results = fut.result()
+                jobs.extend(results)
+            except Exception:
+                pass
+
+    return jobs[:max_total_jobs]

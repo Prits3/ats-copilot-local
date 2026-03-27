@@ -1,0 +1,96 @@
+{
+  "personal": {
+    "name": "Your Name",
+    "email": "you@email.com",
+    "phone": "+49 123 456 7890",
+    "linkedin": "linkedin.com/in/yourprofile",
+    "github": "github.com/yourusername",
+    "location": "Berlin, Germany"
+  },
+  "roles": [
+    {
+      "id": "role_1",
+      "title": "Data Analyst Intern",
+      "company": "Continental AG",
+      "start_date": "Jun 2024",
+      "end_date": "Sep 2024",
+      "location": "Berlin, Germany",
+      "bullets": [
+        "Built Power BI dashboard tracking 12 KPIs across 3 production lines, reducing report generation time by 4 hours/week",
+        "Wrote SQL queries joining 5 tables to identify defect patterns, uncovering $200K annual waste in rework costs",
+        "Automated weekly reporting pipeline in Python (pandas + openpyxl), saving 6 hours of manual work monthly",
+        "Presented findings to 8 senior stakeholders, influencing procurement strategy for Q3 supplier contracts"
+      ],
+      "skills": ["Python", "SQL", "Power BI", "pandas", "Excel", "Stakeholder Communication"],
+      "tags": ["data_analyst", "business_analyst", "manufacturing", "reporting"]
+    },
+    {
+      "id": "role_2",
+      "title": "Data Science Intern",
+      "company": "Startup XYZ",
+      "start_date": "Jan 2024",
+      "end_date": "Apr 2024",
+      "location": "Remote",
+      "bullets": [
+        "Developed customer churn prediction model (XGBoost) achieving 87% accuracy on 50K user dataset",
+        "Built feature engineering pipeline reducing model training time by 40% via vectorized transformations",
+        "Created A/B test analysis framework in Python used by 3 product teams for experiment evaluation",
+        "Deployed model via FastAPI endpoint handling 500+ daily predictions in production"
+      ],
+      "skills": ["Python", "scikit-learn", "XGBoost", "FastAPI", "A/B Testing", "Feature Engineering"],
+      "tags": ["data_scientist", "ml_engineer", "startup", "modeling"]
+    }
+  ],
+  "projects": [
+    {
+      "id": "proj_1",
+      "name": "ATS CV Builder",
+      "description": "AI-powered CV generation tool that tailors resumes to job descriptions",
+      "bullets": [
+        "Built end-to-end NLP pipeline using sentence-transformers for semantic job-CV matching",
+        "Integrated Ollama LLM to rewrite CV bullets with impact-driven language automatically",
+        "Designed Streamlit UI with PDF export, used by 50+ beta testers"
+      ],
+      "skills": ["Python", "Streamlit", "NLP", "sentence-transformers", "ReportLab"],
+      "tags": ["nlp", "data_scientist", "software_engineer"],
+      "url": "github.com/yourusername/ats-copilot"
+    },
+    {
+      "id": "proj_2",
+      "name": "Berlin Startup Job Market Dashboard",
+      "description": "Web scraper + dashboard tracking 500+ Berlin startup job postings weekly",
+      "bullets": [
+        "Scraped 500+ job listings from 50 Berlin startup career pages using BeautifulSoup + requests",
+        "Built interactive Tableau dashboard showing hiring trends by role, seniority, and tech stack",
+        "Automated weekly data refresh via GitHub Actions cron job"
+      ],
+      "skills": ["Python", "BeautifulSoup", "Tableau", "GitHub Actions", "pandas"],
+      "tags": ["data_analyst", "business_analyst"],
+      "url": ""
+    }
+  ],
+  "education": [
+    {
+      "institution": "Technical University of Berlin",
+      "degree": "BSc",
+      "field": "Information Systems",
+      "start_date": "Oct 2021",
+      "end_date": "Present",
+      "gpa": "1.8",
+      "relevant_courses": ["Statistics", "Machine Learning", "Database Systems", "Business Intelligence"]
+    }
+  ],
+  "skills": {
+    "technical": ["Python", "SQL", "R", "Machine Learning", "Statistics", "A/B Testing", "Data Modeling"],
+    "tools": ["Power BI", "Tableau", "Excel", "dbt", "Airflow", "Docker", "Git", "Jupyter", "Streamlit", "FastAPI"],
+    "soft": ["Stakeholder Communication", "Problem Solving", "Data Storytelling", "Cross-functional Collaboration"]
+  },
+  "achievements": [
+    "Dean's List 2023 — Top 10% of cohort",
+    "1st Place, TU Berlin Data Science Hackathon 2023 — built demand forecasting model in 24h"
+  ],
+  "certifications": [
+    "Google Data Analytics Professional Certificate (2023)",
+    "Microsoft Power BI Data Analyst Associate (2024)"
+  ]
+}

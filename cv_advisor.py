@@ -193,6 +193,91 @@ def build_why_match_and_action_plan(cv_evidence: List[Dict], missing: List[str])
     return {"why_match": why, "action_plan": action}
 
 
+def detailed_ats_suggestions(ats: Dict, cv_text: str) -> List[Dict]:
+    """Return per-category breakdown with specific, actionable fix text."""
+    cv = cv_text or ""
+    cv_low = cv.lower()
+
+    # ── Contact (max 15) ──
+    missing_contact = []
+    if not re.search(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", cv):
+        missing_contact.append("email address")
+    if not re.search(r"(\+?\d[\d\-\s()]{7,}\d)", cv):
+        missing_contact.append("phone number")
+    if "linkedin" not in cv_low:
+        missing_contact.append("LinkedIn URL (linkedin.com/in/...)")
+    if "github" not in cv_low:
+        missing_contact.append("GitHub URL (github.com/...)")
+    if not re.search(r"\b(berlin|germany|remote|hybrid)\b", cv_low):
+        missing_contact.append("location (e.g. Berlin, Germany or Remote)")
+    cs = ats.get("contact_score", 0)
+    contact_fix = f"Missing: {', '.join(missing_contact)}" if missing_contact else "All contact fields present."
+
+    # ── Sections (max 15) ──
+    missing_sections = [s for s in ["Experience", "Education", "Skills", "Projects"] if s.lower() not in cv_low]
+    ss = ats.get("section_score", 0)
+    section_fix = (
+        f"Add these section headers: {', '.join(missing_sections)}"
+        if missing_sections else "All required sections present."
+    )
+
+    # ── Keywords (max 30) ──
+    ks = ats.get("keyword_score", 0)
+    required = ats.get("required_keywords", [])
+    matched_req = ats.get("matched_keywords", [])
+    missing_req = [s for s in required if s not in matched_req][:10]
+    if missing_req:
+        keyword_fix = (
+            f"Add these {len(missing_req)} missing keywords (only if you genuinely have the skill): "
+            + ", ".join(f"**{s}**" for s in missing_req)
+        )
+    elif ks < 22:
+        keyword_fix = "Mirror the exact JD phrasing — use the same wording the JD uses for tools and methods."
+    else:
+        keyword_fix = "Strong keyword coverage. Mirror JD phrasing closely for edge cases."
+
+    # ── Impact (max 20) ──
+    impact_s = ats.get("impact_score", 0)
+    percents = len(re.findall(r"\d+\s?%", cv))
+    numbers = len(re.findall(r"\b\d+(?:[.,]\d+)?\b", cv))
+    currency = len(re.findall(r"[$€£]\s?\d", cv))
+    if impact_s < 8:
+        impact_fix = (
+            f"Only {percents} % figures and {numbers} numbers found. Add metrics to at least 4–5 bullets: "
+            "e.g. 'Reduced query time by 40%', 'Processed 2M+ records daily', 'Grew DAU from 10K to 50K'."
+        )
+    elif impact_s < 14:
+        impact_fix = (
+            f"{percents} % figures, {currency} currency mentions found. "
+            "Add 2–3 more: include time saved, revenue impact, or scale (users, records, cost)."
+        )
+    else:
+        impact_fix = f"Strong metrics: {percents} % figures, {numbers} numbers, {currency} currency mentions."
+
+    return [
+        {
+            "category": "Contact Info", "score": cs, "max": 15,
+            "status": "good" if cs >= 12 else ("warn" if cs >= 8 else "bad"),
+            "fix": contact_fix,
+        },
+        {
+            "category": "Section Headers", "score": ss, "max": 15,
+            "status": "good" if ss >= 12 else ("warn" if ss >= 8 else "bad"),
+            "fix": section_fix,
+        },
+        {
+            "category": "Keyword Match", "score": ks, "max": 30,
+            "status": "good" if ks >= 22 else ("warn" if ks >= 14 else "bad"),
+            "fix": keyword_fix,
+        },
+        {
+            "category": "Impact & Metrics", "score": impact_s, "max": 20,
+            "status": "good" if impact_s >= 14 else ("warn" if impact_s >= 8 else "bad"),
+            "fix": impact_fix,
+        },
+    ]
+
+
 def cv_improvement_suggestions(top_jobs: List[Dict], cv_text: str) -> List[str]:
     tips = []
     seen_missing = set()
