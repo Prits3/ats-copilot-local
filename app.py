@@ -13,6 +13,18 @@ load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.abspath(__file__)),
 import pandas as pd
 import streamlit as st
 
+
+def _secret(key: str) -> str:
+    """Read an API key from os.environ or st.secrets (Streamlit Cloud)."""
+    val = os.environ.get(key, "")
+    if not val:
+        try:
+            val = st.secrets.get(key, "") or ""
+        except Exception:
+            pass
+    return val
+
+
 from bullet_rewriter import generate_positioning_summary, holistic_cv_rewrite, rewrite_experience_bullets
 from cv_advisor import ats_score, detailed_ats_suggestions, interpret_ats_score, missing_skills
 from cv_generator import generate_cv_markdown, generate_pdf_bytes
@@ -154,8 +166,8 @@ def _init_state() -> None:
         "mode": None,           # None | "create" | "tailor" | "scan"
         # Shared
         "master_profile": None,
-        "llm_provider": "openai" if os.environ.get("OPENAI_API_KEY") else ("groq" if os.environ.get("GROQ_API_KEY") else ("gemini" if os.environ.get("GEMINI_API_KEY") else "ollama")),
-        "llm_model": "gpt-4o-mini" if os.environ.get("OPENAI_API_KEY") else ("llama-3.3-70b-versatile" if os.environ.get("GROQ_API_KEY") else ("gemini-2.0-flash-lite" if os.environ.get("GEMINI_API_KEY") else "mistral:7b")),
+        "llm_provider": "openai" if _secret("OPENAI_API_KEY") else ("groq" if _secret("GROQ_API_KEY") else ("gemini" if _secret("GEMINI_API_KEY") else "ollama")),
+        "llm_model": "gpt-4o-mini" if _secret("OPENAI_API_KEY") else ("llama-3.3-70b-versatile" if _secret("GROQ_API_KEY") else ("gemini-2.0-flash-lite" if _secret("GEMINI_API_KEY") else "mistral:7b")),
         # Create CV
         "create_personal": {},
         "create_roles": [_empty_role()],
@@ -228,11 +240,11 @@ def _llm_available() -> bool:
     """Return True if the current LLM provider is reachable."""
     provider = st.session_state.get("llm_provider", "ollama")
     if provider == "openai":
-        return bool(os.environ.get("OPENAI_API_KEY"))
+        return bool(_secret("OPENAI_API_KEY"))
     if provider == "gemini":
-        return bool(os.environ.get("GEMINI_API_KEY"))
+        return bool(_secret("GEMINI_API_KEY"))
     if provider == "groq":
-        return bool(os.environ.get("GROQ_API_KEY"))
+        return bool(_secret("GROQ_API_KEY"))
     return cached_ollama_check(st.session_state.get("llm_model", "mistral:7b"))
 
 
@@ -568,17 +580,17 @@ def _show_homepage():
         provider = st.session_state.get("llm_provider", "groq")
         model = st.session_state.get("llm_model", "")
         if provider == "openai":
-            if os.environ.get("OPENAI_API_KEY"):
+            if _secret("OPENAI_API_KEY"):
                 st.success(f"OpenAI ready ({model or 'gpt-4o-mini'})")
             else:
                 st.error("OPENAI_API_KEY not set — add it to .env")
         elif provider == "gemini":
-            if os.environ.get("GEMINI_API_KEY"):
+            if _secret("GEMINI_API_KEY"):
                 st.success(f"Gemini ready ({model or 'gemini-2.0-flash-lite'})")
             else:
                 st.error("GEMINI_API_KEY not set — add it to .env")
         elif provider == "groq":
-            if os.environ.get("GROQ_API_KEY"):
+            if _secret("GROQ_API_KEY"):
                 st.success(f"Groq ready ({model or 'llama-3.3-70b-versatile'})")
             else:
                 st.error("GROQ_API_KEY not set — add it to .env")
@@ -995,17 +1007,17 @@ def _show_tailor_cv():
         provider = st.session_state.get("llm_provider", "groq")
         model = st.session_state.get("llm_model", "")
         if provider == "openai":
-            if os.environ.get("OPENAI_API_KEY"):
+            if _secret("OPENAI_API_KEY"):
                 st.success(f"OpenAI ready ({model or 'gpt-4o-mini'})")
             else:
                 st.error("OPENAI_API_KEY not set — add it to .env")
         elif provider == "gemini":
-            if os.environ.get("GEMINI_API_KEY"):
+            if _secret("GEMINI_API_KEY"):
                 st.success(f"Gemini ready ({model or 'gemini-2.0-flash-lite'})")
             else:
                 st.error("GEMINI_API_KEY not set — add it to .env")
         elif provider == "groq":
-            if os.environ.get("GROQ_API_KEY"):
+            if _secret("GROQ_API_KEY"):
                 st.success(f"Groq ready ({model or 'llama-3.3-70b-versatile'})")
             else:
                 st.error("GROQ_API_KEY not set — add it to .env")
