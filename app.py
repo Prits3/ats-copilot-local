@@ -486,10 +486,29 @@ def _profile_from_cv_text(cv_text: str) -> Optional[dict]:
     education = _parse_education(sections.get("education", []))
     projects = _parse_projects(sections.get("projects", []))
 
-    # If no roles AND no education were found, the parser couldn't make sense of
-    # the text — return None so the caller can show a helpful error.
+    # If no structured sections found, build a minimal profile from raw lines
+    # so the user at least gets something to review/edit rather than a hard error.
     if not roles and not education:
-        return None
+        body_lines = [
+            l for l in lines
+            if len(l) > 20
+            and "@" not in l
+            and not PHONE_RE.search(l)
+            and not l.isupper()
+            and not l.endswith(":")
+        ]
+        bullets = [l.lstrip("•·▪▸➤›-–—* ").strip() for l in body_lines[:12]]
+        roles = [{
+            "id": "role_1",
+            "title": "See CV — please review and edit",
+            "company": "",
+            "start_date": "",
+            "end_date": "Present",
+            "location": "",
+            "bullets": bullets,
+            "skills": [],
+            "tags": [],
+        }]
 
     return {
         "personal": {
