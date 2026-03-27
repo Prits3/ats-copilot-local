@@ -250,58 +250,268 @@ def _suggest_positioning(jd_text: str) -> str:
     return "Analytical Problem Solver"
 
 
-def _profile_from_cv_text(cv_text: str) -> dict:
-    """Build a minimal master profile from raw CV text — no LLM needed."""
-    from profile import extract_profile_signals
-    signals = extract_profile_signals(cv_text)
-    skills = signals.get("skills", [])
+def _profile_from_cv_text(cv_text: str) -> Optional[dict]:
+    """Parse CV text into a master profile without LLM.
 
-    # Extract bullet-like lines (lines starting with action indicators or long enough)
+    Uses section-header detection + date-line heuristics to create structured
+    data. Returns None if the text can't be meaningfully parsed (so the caller
+    can show the user an error instead of a broken CV).
+    """
     import re
+
     lines = [l.strip() for l in cv_text.split("\n") if l.strip()]
-    bullets = [
-        l for l in lines
-        if re.match(r"^[•\-–*]", l) or (len(l) > 30 and not l.isupper() and not l.endswith(":"))
-    ][:30]
+    if not lines:
+        return None
 
-    # Try to detect name from first non-empty line
-    name = lines[0] if lines else "Your Name"
+    # ── Regexes ───────────────────────────────────────────────────────────────
+    EMAIL_RE = re.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+")
+    PHONE_RE = re.compile(r"\+?[\d][\d\s\-\(\)\.]{7,}")
+    DATE_RE = re.compile(
+        r"\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s*\d{4}"
+        r"|\b(20\d{2}|19\d{2})\b"
+        r"|\b(Present|Current)\b",
+        re.I,
+    )
 
-    # Second line is often the tagline/subtitle if it doesn't look like contact info
+    # ── Personal info from first ~10 lines ────────────────────────────────────
+    name = lines[0]
     tagline = ""
+    contact_text = "\n".join(lines[:10])
+
     if len(lines) > 1:
         second = lines[1]
-        if "@" not in second and not re.match(r"[\+\d]", second) and len(second) < 120:
+        if not EMAIL_RE.search(second) and not PHONE_RE.search(second) and len(second) < 120:
             tagline = second
 
-    # Extract email / phone with regex
-    email = next((w for l in lines for w in l.split() if "@" in w), "")
-    phone = next((re.search(r"[\+\d][\d\s\-\(\)]{7,}", l) for l in lines if re.search(r"[\+\d][\d\s\-\(\)]{7,}", l)), None)
-    phone_str = phone.group() if phone else ""
+    email_m = EMAIL_RE.search(contact_text)
+    email = email_m.group() if email_m else ""
+    phone_m = PHONE_RE.search(contact_text)
+    phone = phone_m.group().strip() if phone_m else ""
+    linkedin = next((w for l in lines[:10] for w in l.split() if "linkedin" in w.lower()), "")
+    github = next((w for l in lines[:10] for w in l.split() if "github" in w.lower()), "")
+
+    # ── Section splitting ─────────────────────────────────────────────────────
+    def _section_key(line: str) -> Optional[str]:
+        c = line.rstrip(":").strip()
+        if re.match(r"^(work\s+)?experience$|^employment$|^professional\s+experience$", c, re.I):
+            return "experience"
+        if re.match(r"^education$|^academic\s+background$|^qualifications?$", c, re.I):
+            return "education"
+        if re.match(r"^projects?$|^personal\s+projects?$|^key\s+projects?$|^selected\s+projects?$", c, re.I):
+            return "projects"
+        if re.match(r"^(technical\s+)?skills?$|^core\s+competencies$|^tools?\s*&?\s*technologies?$", c, re.I):
+            return "skills"
+        if re.match(r"^certifications?$|^certificates?$|^licenses?$", c, re.I):
+            return "certifications"
+        if re.match(r"^achievements?$|^awards?$|^honors?$|^publications?$", c, re.I):
+            return "achievements"
+        return None
+
+    sections: dict[str, list[str]] = {}
+    current = "header"
+    for line in lines:
+        sk = _section_key(line)
+        if sk:
+            current = sk
+            sections.setdefault(current, [])
+        else:
+            sections.setdefault(current, []).append(line)
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+    def _has_date(line: str) -> bool:
+        return bool(DATE_RE.search(line))
+
+    def _is_bullet(line: str) -> bool:
+        return bool(re.match(r"^[•·▪▸➤›\-–—*]", line))
+
+    def _clean_bullet(line: str) -> str:
+        return re.sub(r"^[•·▪▸➤›\-–—*\s]+", "", line).strip()
+
+    def _extract_dates(text: str) -> list[str]:
+        return [m for tup in DATE_RE.findall(text) for m in tup if m]
+
+    # ── Parse roles ───────────────────────────────────────────────────────────
+    def _parse_roles(exp_lines: list[str]) -> list[dict]:
+        # Role-header lines = lines that have a date token but aren't bullets or
+        # contact info (skip section name itself)
+        header_idxs = [
+            i for i, l in enumerate(exp_lines)
+            if _has_date(l) and not _is_bullet(l) and "@" not in l and not PHONE_RE.search(l)
+        ]
+        if not header_idxs:
+            return []
+
+        roles = []
+        for pos, hi in enumerate(header_idxs):
+            header_line = exp_lines[hi]
+            dates = _extract_dates(header_line)
+            start_date = dates[0] if dates else ""
+            end_date = next(
+                (d for d in dates[1:] if re.match(r"present|current|20\d{2}|19\d{2}", d, re.I)),
+                "Present",
+            )
+            title = DATE_RE.sub("", header_line).strip(" |–—-/·").strip()
+
+            # Line right after header: could be company name (short, no date, no bullet)
+            company = ""
+            next_content_start = hi + 1
+            if next_content_start < len(exp_lines):
+                nxt = exp_lines[next_content_start]
+                if not _has_date(nxt) and not _is_bullet(nxt) and len(nxt) < 80 and "@" not in nxt:
+                    company = nxt
+                    next_content_start += 1
+
+            # Bullets live between this header and the next
+            bullet_end = header_idxs[pos + 1] if pos + 1 < len(header_idxs) else len(exp_lines)
+            bullets = []
+            for j in range(next_content_start, bullet_end):
+                bl = exp_lines[j]
+                if "@" in bl or PHONE_RE.search(bl):
+                    continue
+                if _is_bullet(bl) or (len(bl) > 20 and not _has_date(bl)):
+                    clean = _clean_bullet(bl)
+                    if len(clean) > 10:
+                        bullets.append(clean)
+                if len(bullets) >= 5:
+                    break
+
+            # Skip if title resolves to a section name or is empty
+            if not title or re.match(
+                r"^(professional\s+)?experience$|^employment$",
+                title,
+                re.I,
+            ):
+                continue
+
+            roles.append({
+                "id": f"role_{len(roles) + 1}",
+                "title": title,
+                "company": company,
+                "start_date": start_date,
+                "end_date": end_date if end_date else "Present",
+                "location": "",
+                "bullets": bullets,
+                "skills": [],
+                "tags": [],
+            })
+        return roles
+
+    # ── Parse education ───────────────────────────────────────────────────────
+    def _parse_education(edu_lines: list[str]) -> list[dict]:
+        header_idxs = [
+            i for i, l in enumerate(edu_lines)
+            if _has_date(l) and not _is_bullet(l) and "@" not in l
+        ]
+        result = []
+        for pos, hi in enumerate(header_idxs):
+            line = edu_lines[hi]
+            years = re.findall(r"\b(20\d{2}|19\d{2})\b", line)
+            institution = re.sub(r"\b(20\d{2}|19\d{2})\b|\bPresent\b|\bCurrent\b", "", line, flags=re.I).strip(" |–—-/·").strip()
+            start = years[0] if years else ""
+            end = years[1] if len(years) > 1 else "Present"
+            degree = ""
+            next_end = header_idxs[pos + 1] if pos + 1 < len(header_idxs) else len(edu_lines)
+            if hi + 1 < next_end:
+                nxt = edu_lines[hi + 1]
+                if not _has_date(nxt) and not _is_bullet(nxt):
+                    degree = nxt
+            if institution:
+                result.append({
+                    "institution": institution,
+                    "degree": degree,
+                    "field": "",
+                    "start_date": start,
+                    "end_date": end,
+                    "gpa": "",
+                    "location": "",
+                    "relevant_courses": [],
+                })
+        return result
+
+    # ── Parse projects ────────────────────────────────────────────────────────
+    def _parse_projects(proj_lines: list[str]) -> list[dict]:
+        projects = []
+        i = 0
+        while i < len(proj_lines):
+            line = proj_lines[i]
+            if _is_bullet(line) or "@" in line or len(line) >= 100:
+                i += 1
+                continue
+            name = line
+            description = ""
+            bullets: list[str] = []
+            i += 1
+            if i < len(proj_lines) and not _is_bullet(proj_lines[i]) and len(proj_lines[i]) < 150:
+                description = proj_lines[i]
+                i += 1
+            while i < len(proj_lines) and _is_bullet(proj_lines[i]):
+                b = _clean_bullet(proj_lines[i])
+                if len(b) > 8 and "@" not in b:
+                    bullets.append(b)
+                i += 1
+                if len(bullets) >= 3:
+                    break
+            if name:
+                projects.append({
+                    "id": f"proj_{len(projects) + 1}",
+                    "name": name,
+                    "description": description,
+                    "bullets": bullets,
+                    "skills": [],
+                    "tags": [],
+                    "url": "",
+                })
+        return projects
+
+    # ── Skills ────────────────────────────────────────────────────────────────
+    all_skills: list[str] = []
+    for sl in sections.get("skills", []):
+        chunk = sl.split(":", 1)[1] if ":" in sl else sl
+        for part in re.split(r"[,;|•·▪\-–—]", chunk):
+            p = part.strip()
+            if 2 < len(p) < 35 and p.lower() not in {"and", "or", "the", "with", "skills", "including"}:
+                all_skills.append(p)
+
+    # ── Certifications & achievements ─────────────────────────────────────────
+    certifications = [
+        _clean_bullet(c) for c in sections.get("certifications", [])
+        if 5 < len(c) < 120 and "@" not in c
+    ]
+    achievements = [
+        _clean_bullet(a) for a in sections.get("achievements", [])
+        if len(a) > 5 and "@" not in a
+    ]
+
+    roles = _parse_roles(sections.get("experience", []))
+    education = _parse_education(sections.get("education", []))
+    projects = _parse_projects(sections.get("projects", []))
+
+    # If no roles AND no education were found, the parser couldn't make sense of
+    # the text — return None so the caller can show a helpful error.
+    if not roles and not education:
+        return None
 
     return {
-        "personal": {"name": name, "tagline": tagline, "email": email, "phone": phone_str,
-                     "linkedin": "", "github": "", "location": ""},
-        "roles": [{
-            "id": "role_1",
-            "title": "Professional Experience",
-            "company": "",
-            "start_date": "",
-            "end_date": "Present",
+        "personal": {
+            "name": name,
+            "tagline": tagline,
+            "email": email,
+            "phone": phone,
+            "linkedin": linkedin,
+            "github": github,
             "location": "",
-            "bullets": bullets,
-            "skills": skills,
-            "tags": [],
-        }],
-        "projects": [],
-        "education": [],
-        "skills": {
-            "technical": skills[:10],
-            "tools": skills[10:] if len(skills) > 10 else [],
-            "soft": [],
         },
-        "certifications": [],
-        "achievements": [],
+        "roles": roles,
+        "projects": projects,
+        "education": education,
+        "skills": {
+            "technical": all_skills[:12],
+            "tools": all_skills[12:20] if len(all_skills) > 12 else [],
+            "soft": [],
+            "languages": [],
+        },
+        "certifications": certifications,
+        "achievements": achievements,
     }
 
 
@@ -799,255 +1009,274 @@ def _show_tailor_cv():
 
         generate_btn = st.button("Generate Tailored CV", type="primary", use_container_width=True)
 
-    # ── Right: Output ──
-    with col_output:
-        result = st.session_state.get("tailor_result")
+    result = st.session_state.get("tailor_result")
 
-        if generate_btn:
-            if not jd_text.strip():
+    if generate_btn:
+        if not jd_text.strip():
+            with col_output:
                 st.error("Paste a job description first.")
-            else:
-                # Extract profile from PDF if needed
-                if not profile and st.session_state.get("tailor_cv_pdf_bytes"):
-                    with st.spinner("Extracting profile from PDF..."):
-                        pages = cached_extract_pdf_pages(st.session_state["tailor_cv_pdf_bytes"])
-                        cv_text = "\n".join(pages)
-                        # Try LLM extraction first, fall back to regex-based extraction
-                        extracted = extract_master_profile_from_cv(cv_text, _llm_fn())
-                        if not extracted:
-                            extracted = _profile_from_cv_text(cv_text)
-                        extracted = sanitize_profile(extracted)
-                        profile = extracted
-                        st.session_state["master_profile"] = extracted
+        else:
+            # Extract profile from PDF if needed
+            if not profile and st.session_state.get("tailor_cv_pdf_bytes"):
+                with st.spinner("Extracting profile from PDF..."):
+                    pages = cached_extract_pdf_pages(st.session_state["tailor_cv_pdf_bytes"])
+                    cv_text = "\n".join(pages)
+                    # Try LLM extraction first, fall back to regex-based extraction
+                    extracted = extract_master_profile_from_cv(cv_text, _llm_fn())
+                    if not extracted:
+                        st.warning(
+                            "⚠️ LLM extraction failed — attempting regex parse. "
+                            "For best results, use the **Profile Builder** tab to enter your details manually.",
+                            icon=None,
+                        )
+                        extracted = _profile_from_cv_text(cv_text)
+                    if not extracted:
+                        with col_output:
+                            st.error(
+                                "Could not parse your CV automatically. "
+                                "Please use the **Profile Builder** tab to enter your details manually."
+                            )
+                        st.stop()
+                    extracted = sanitize_profile(extracted)
+                    profile = extracted
+                    st.session_state["master_profile"] = extracted
 
-                if not profile:
+            if not profile:
+                with col_output:
                     st.error("No CV loaded. Upload a PDF or create your profile first.")
-                    st.stop()
+                st.stop()
 
-                # Always sanitize at generation time — even cached profiles may be stale
-                profile = sanitize_profile(profile)
+            # Always sanitize at generation time — even cached profiles may be stale
+            profile = sanitize_profile(profile)
 
-                embedder = get_embedder()
-                fn = _llm_fn()
+            embedder = get_embedder()
+            fn = _llm_fn()
 
-                with st.spinner("Analyzing job description..."):
-                    jd_analysis = analyze_jd(jd_text, fn)
+            with st.spinner("Analyzing job description..."):
+                jd_analysis = analyze_jd(jd_text, fn)
 
-                progress = st.progress(0, text="Selecting best experiences...")
-                selected_exps = rank_experiences(profile, jd_text, jd_analysis, embedder, top_n=4)
-                selected_projs = rank_projects(profile, jd_text, jd_analysis, embedder, top_n=3)
-                relevant_skills = filter_skills(profile, jd_analysis)
+            progress = st.progress(0, text="Selecting best experiences...")
+            selected_exps = rank_experiences(profile, jd_text, jd_analysis, embedder, top_n=4)
+            selected_projs = rank_projects(profile, jd_text, jd_analysis, embedder, top_n=3)
+            relevant_skills = filter_skills(profile, jd_analysis)
 
-                effective_positioning = (
-                    _suggest_positioning(jd_text)
-                    if positioning == "🔍 Auto-detect from JD"
-                    else positioning
-                )
+            effective_positioning = (
+                _suggest_positioning(jd_text)
+                if positioning == "🔍 Auto-detect from JD"
+                else positioning
+            )
 
-                # ── Holistic single-shot rewrite (preferred) ─────────────────
-                diff_pairs = []
-                summary = ""
-                if rewrite_on and _llm_available():
-                    # LLM is available — rewrite entire CV in one call
-                    progress.progress(30, text="AI is rewriting your CV…")
-                    rewrite_result = holistic_cv_rewrite(
-                        profile, selected_exps, selected_projs,
-                        jd_text, jd_analysis, effective_positioning, fn,
-                    )
-                    orig_bullets = {
-                        e.get("title", ""): e.get("bullets", []) for e in selected_exps
-                    }
-                    selected_exps  = rewrite_result["experiences"]
-                    selected_projs = rewrite_result["projects"]
-                    summary        = rewrite_result.get("summary", "")
-
-                    # Build diff pairs for "What Changed" tab
-                    for exp in selected_exps:
-                        title = exp.get("title", "")
-                        orig = orig_bullets.get(title, [])
-                        for i, new_b in enumerate(exp.get("bullets", [])):
-                            old_b = orig[i] if i < len(orig) else new_b
-                            diff_pairs.append((old_b, new_b, title))
-
-                    # Generate summary with LLM if holistic didn't produce one
-                    if not summary and summary_on:
-                        progress.progress(70, text="Generating summary...")
-                        summary = generate_positioning_summary(
-                            profile, jd_analysis, effective_positioning, fn
-                        )
-                else:
-                    # No LLM — use original bullets, try summary separately
-                    diff_pairs = [(b, b, e.get("title", "")) for e in selected_exps for b in e.get("bullets", [])]
-                    if summary_on:
-                        summary = generate_positioning_summary(
-                            profile, jd_analysis, effective_positioning, fn
-                        )
-
-                progress.progress(90, text="Assembling CV...")
-                cv_md = generate_cv_markdown(
+            # ── Holistic single-shot rewrite (preferred) ─────────────────
+            diff_pairs = []
+            summary = ""
+            if rewrite_on and _llm_available():
+                # LLM is available — rewrite entire CV in one call
+                progress.progress(30, text="AI is rewriting your CV…")
+                rewrite_result = holistic_cv_rewrite(
                     profile, selected_exps, selected_projs,
-                    relevant_skills, jd_analysis, summary,
+                    jd_text, jd_analysis, effective_positioning, fn,
                 )
-                cv_ats = ats_score(cv_md, jd_text)
-                pdf_bytes = generate_pdf_bytes(
-                    profile, selected_exps, selected_projs,
-                    relevant_skills, jd_analysis, summary,
-                )
-                progress.progress(100, text="Done!")
-                time.sleep(0.3)
-                progress.empty()
-
-                st.session_state["tailor_result"] = {
-                    "cv_md": cv_md,
-                    "pdf_bytes": pdf_bytes,
-                    "_debug_summary": summary,
-                    "_debug_exp_count": len(selected_exps),
-                    "_debug_proj_count": len(selected_projs),
-                    "ats": cv_ats,
-                    "diff_pairs": diff_pairs,
-                    "jd_analysis": jd_analysis,
-                    "profile": profile,
-                    "selected_exps": selected_exps,
-                    "selected_projs": selected_projs,
-                    "relevant_skills": relevant_skills,
-                    "summary": summary,
+                orig_bullets = {
+                    e.get("title", ""): e.get("bullets", []) for e in selected_exps
                 }
-                result = st.session_state["tailor_result"]
+                selected_exps = rewrite_result["experiences"]
+                selected_projs = rewrite_result["projects"]
+                summary = rewrite_result.get("summary", "")
 
+                # Build diff pairs for "What Changed" tab
+                for exp in selected_exps:
+                    title = exp.get("title", "")
+                    orig = orig_bullets.get(title, [])
+                    for i, new_b in enumerate(exp.get("bullets", [])):
+                        old_b = orig[i] if i < len(orig) else new_b
+                        diff_pairs.append((old_b, new_b, title))
+
+                # Generate summary with LLM if holistic didn't produce one
+                if not summary and summary_on:
+                    progress.progress(70, text="Generating summary...")
+                    summary = generate_positioning_summary(
+                        profile, jd_analysis, effective_positioning, fn
+                    )
+            else:
+                # No LLM — use original bullets, try summary separately
+                diff_pairs = [(b, b, e.get("title", "")) for e in selected_exps for b in e.get("bullets", [])]
+                if summary_on:
+                    summary = generate_positioning_summary(
+                        profile, jd_analysis, effective_positioning, fn
+                    )
+
+            progress.progress(90, text="Assembling CV...")
+            cv_md = generate_cv_markdown(
+                profile, selected_exps, selected_projs,
+                relevant_skills, jd_analysis, summary,
+            )
+            cv_ats = ats_score(cv_md, jd_text)
+            pdf_bytes = generate_pdf_bytes(
+                profile, selected_exps, selected_projs,
+                relevant_skills, jd_analysis, summary,
+            )
+            progress.progress(100, text="Done!")
+            time.sleep(0.3)
+            progress.empty()
+
+            st.session_state["tailor_result"] = {
+                "cv_md": cv_md,
+                "pdf_bytes": pdf_bytes,
+                "_debug_summary": summary,
+                "_debug_exp_count": len(selected_exps),
+                "_debug_proj_count": len(selected_projs),
+                "ats": cv_ats,
+                "diff_pairs": diff_pairs,
+                "jd_analysis": jd_analysis,
+                "profile": profile,
+                "selected_exps": selected_exps,
+                "selected_projs": selected_projs,
+                "relevant_skills": relevant_skills,
+                "summary": summary,
+            }
+            result = st.session_state["tailor_result"]
+
+    with col_output:
+        st.subheader("Preview")
         if result:
-            cv_ats = result["ats"]
-            score_val = cv_ats.get("total", 0)
-            css_class = "ats-good" if score_val >= 75 else ("ats-ok" if score_val >= 55 else "ats-bad")
-
-            st.markdown(
-                f"<div style='text-align:center;margin-bottom:16px;'>"
-                f"<span class='ats-badge {css_class}'>{score_val}</span>"
-                f"<span style='font-size:1em;color:#666;'> / 100 ATS Score</span>"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
-
-            # Tabs: CV / What Changed / ATS Details
-            tab_cv, tab_diff, tab_ats = st.tabs(["📄 CV", "🔄 What Changed", "📊 ATS Details"])
-
-            with tab_cv:
-                import base64 as _b64
-                pdf = result.get("pdf_bytes")
-                if pdf:
-                    b64 = _b64.b64encode(pdf).decode()
-                    st.markdown(
-                        f'<iframe src="data:application/pdf;base64,{b64}" '
-                        f'width="100%" height="750px" style="border:none;border-radius:8px;"></iframe>',
-                        unsafe_allow_html=True,
-                    )
-                else:
-                    st.markdown(result["cv_md"])
-
-            with tab_diff:
-                jd_analysis = result.get("jd_analysis", {})
-                role = jd_analysis.get('role_type', '').replace('_', ' ').title()
-                seniority = jd_analysis.get('seniority', '').title()
-                req_skills = ', '.join(jd_analysis.get('required_skills', [])[:6])
-                if role:
-                    st.caption(f"**{role}** · {seniority}" + (f" · {req_skills}" if req_skills else ""))
-                st.divider()
-
-                changed_pairs = [(o, r, t) for o, r, t in result.get("diff_pairs", []) if o != r]
-                unchanged_pairs = [(o, r, t) for o, r, t in result.get("diff_pairs", []) if o == r and len(o) < 300]
-
-                if changed_pairs:
-                    seen_titles: set = set()
-                    for orig, rewritten, title in changed_pairs:
-                        if title and title not in seen_titles:
-                            st.markdown(f"##### {title}")
-                            seen_titles.add(title)
-                        c1, c2 = st.columns(2)
-                        c1.markdown(
-                            f"<div class='bullet-original'>"
-                            f"<span class='bullet-label'>Original</span>{orig}"
-                            f"</div>", unsafe_allow_html=True
-                        )
-                        c2.markdown(
-                            f"<div class='bullet-rewritten'>"
-                            f"<span class='bullet-label'>Rewritten ✓</span>{rewritten}"
-                            f"</div>", unsafe_allow_html=True
-                        )
-                else:
-                    st.info("No bullets were rewritten — either rewrite was off or the CV had no structured bullets.")
-
-                if unchanged_pairs:
-                    with st.expander(f"Unchanged bullets ({len(unchanged_pairs)})"):
-                        for orig, _, title in unchanged_pairs:
-                            st.caption(f"**{title}** — {orig[:120]}{'…' if len(orig) > 120 else ''}")
-
-                # Debug panel — shows what went into the CV
-                with st.expander("🔍 Debug: what the AI generated", expanded=False):
-                    st.caption(f"**Experiences used:** {result.get('_debug_exp_count', '?')}  |  "
-                               f"**Projects used:** {result.get('_debug_proj_count', '?')}")
-                    if result.get("_debug_summary"):
-                        st.caption(f"**Generated summary:** {result['_debug_summary']}")
-                    st.code(result["cv_md"], language="markdown")
-
-                # Missing keywords
-                miss = missing_skills(jd_text, result["cv_md"])
-                if miss.get("missing"):
-                    st.divider()
-                    chips = " ".join(
-                        f"<span style='background:#2a1a1a;border:1px solid #dc354555;color:#ff8080;"
-                        f"border-radius:20px;padding:2px 10px;font-size:0.82em;margin:2px;display:inline-block;'>{s}</span>"
-                        for s in miss["missing"]
-                    )
-                    st.markdown(f"**Missing keywords** — add these to your profile if you have them:", unsafe_allow_html=False)
-                    st.markdown(chips, unsafe_allow_html=True)
-
-            with tab_ats:
-                ats_interp = interpret_ats_score(cv_ats)
-                band_color = "#28a745" if ats_interp["band"] == "Strong" else ("#fd7e14" if ats_interp["band"] == "Good" else "#dc3545")
-                st.markdown(
-                    f"<p style='font-size:1.05em;'><span style='color:{band_color};font-weight:700;'>{ats_interp['band']}</span>"
-                    f" — {ats_interp['meaning']}</p>",
-                    unsafe_allow_html=True,
-                )
-                st.divider()
-                suggestions = detailed_ats_suggestions(cv_ats, result["cv_md"])
-                for s in suggestions:
-                    status_color = {"good": "#28a745", "warn": "#fd7e14", "bad": "#dc3545"}[s["status"]]
-                    pct = int(s["score"] / s["max"] * 100) if s["max"] else 0
-                    st.markdown(
-                        f"<div class='ats-row' style='margin-bottom:10px;'>"
-                        f"<div style='min-width:130px;font-weight:600;font-size:0.9em;'>{s['category']}</div>"
-                        f"<div style='flex:1;'>"
-                        f"<div style='background:#333;border-radius:4px;height:6px;margin-bottom:4px;'>"
-                        f"<div style='background:{status_color};width:{pct}%;height:6px;border-radius:4px;'></div></div>"
-                        f"<span style='font-size:0.82em;color:#aaa;'>{s['fix']}</span>"
-                        f"</div>"
-                        f"<div style='min-width:52px;text-align:right;font-size:0.88em;color:{status_color};font-weight:700;'>"
-                        f"{s['score']}/{s['max']}</div>"
-                        f"</div>",
-                        unsafe_allow_html=True,
-                    )
-
-            # Downloads
-            st.divider()
-            pdf_data = result.get("pdf_bytes")
-            dl1, dl2 = st.columns(2)
-            dl1.download_button(
-                "⬇ Download PDF",
-                data=pdf_data or b"",
-                file_name="tailored_cv.pdf",
-                mime="application/pdf",
-                use_container_width=True,
-                disabled=pdf_data is None,
-            )
-            dl2.download_button(
-                "⬇ Download Markdown",
-                data=result["cv_md"],
-                file_name="tailored_cv.md",
-                mime="text/markdown",
-                use_container_width=True,
-            )
+            st.caption("Your generated CV opens full-width below so the PDF stays readable.")
         else:
             st.info("Fill in the job description and click **Generate Tailored CV**.")
+
+    if result:
+        st.divider()
+        st.subheader("Generated CV")
+
+        score_val = result["ats"].get("total", 0)
+        css_class = "ats-good" if score_val >= 75 else ("ats-ok" if score_val >= 55 else "ats-bad")
+
+        st.markdown(
+            f"<div style='text-align:center;margin-bottom:16px;'>"
+            f"<span class='ats-badge {css_class}'>{score_val}</span>"
+            f"<span style='font-size:1em;color:#666;'> / 100 ATS Score</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+        # Tabs: CV / What Changed / ATS Details
+        tab_cv, tab_diff, tab_ats = st.tabs(["📄 CV", "🔄 What Changed", "📊 ATS Details"])
+
+        with tab_cv:
+            import base64 as _b64
+            pdf = result.get("pdf_bytes")
+            if pdf:
+                b64 = _b64.b64encode(pdf).decode()
+                st.markdown(
+                    f'<iframe src="data:application/pdf;base64,{b64}" '
+                    f'width="100%" height="1100px" style="border:none;border-radius:8px;"></iframe>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(result["cv_md"])
+
+        with tab_diff:
+            jd_analysis = result.get("jd_analysis", {})
+            role = jd_analysis.get('role_type', '').replace('_', ' ').title()
+            seniority = jd_analysis.get('seniority', '').title()
+            req_skills = ', '.join(jd_analysis.get('required_skills', [])[:6])
+            if role:
+                st.caption(f"**{role}** · {seniority}" + (f" · {req_skills}" if req_skills else ""))
+            st.divider()
+
+            changed_pairs = [(o, r, t) for o, r, t in result.get("diff_pairs", []) if o != r]
+            unchanged_pairs = [(o, r, t) for o, r, t in result.get("diff_pairs", []) if o == r and len(o) < 300]
+
+            if changed_pairs:
+                seen_titles: set = set()
+                for orig, rewritten, title in changed_pairs:
+                    if title and title not in seen_titles:
+                        st.markdown(f"##### {title}")
+                        seen_titles.add(title)
+                    c1, c2 = st.columns(2)
+                    c1.markdown(
+                        f"<div class='bullet-original'>"
+                        f"<span class='bullet-label'>Original</span>{orig}"
+                        f"</div>", unsafe_allow_html=True
+                    )
+                    c2.markdown(
+                        f"<div class='bullet-rewritten'>"
+                        f"<span class='bullet-label'>Rewritten ✓</span>{rewritten}"
+                        f"</div>", unsafe_allow_html=True
+                    )
+            else:
+                st.info("No bullets were rewritten — either rewrite was off or the CV had no structured bullets.")
+
+            if unchanged_pairs:
+                with st.expander(f"Unchanged bullets ({len(unchanged_pairs)})"):
+                    for orig, _, title in unchanged_pairs:
+                        st.caption(f"**{title}** — {orig[:120]}{'…' if len(orig) > 120 else ''}")
+
+            # Debug panel — shows what went into the CV
+            with st.expander("🔍 Debug: what the AI generated", expanded=False):
+                st.caption(f"**Experiences used:** {result.get('_debug_exp_count', '?')}  |  "
+                           f"**Projects used:** {result.get('_debug_proj_count', '?')}")
+                if result.get("_debug_summary"):
+                    st.caption(f"**Generated summary:** {result['_debug_summary']}")
+                st.code(result["cv_md"], language="markdown")
+
+            # Missing keywords
+            miss = missing_skills(jd_text, result["cv_md"])
+            if miss.get("missing"):
+                st.divider()
+                chips = " ".join(
+                    f"<span style='background:#2a1a1a;border:1px solid #dc354555;color:#ff8080;"
+                    f"border-radius:20px;padding:2px 10px;font-size:0.82em;margin:2px;display:inline-block;'>{s}</span>"
+                    for s in miss["missing"]
+                )
+                st.markdown("**Missing keywords** — add these to your profile if you have them:", unsafe_allow_html=False)
+                st.markdown(chips, unsafe_allow_html=True)
+
+        with tab_ats:
+            cv_ats = result["ats"]
+            ats_interp = interpret_ats_score(cv_ats)
+            band_color = "#28a745" if ats_interp["band"] == "Strong" else ("#fd7e14" if ats_interp["band"] == "Good" else "#dc3545")
+            st.markdown(
+                f"<p style='font-size:1.05em;'><span style='color:{band_color};font-weight:700;'>{ats_interp['band']}</span>"
+                f" — {ats_interp['meaning']}</p>",
+                unsafe_allow_html=True,
+            )
+            st.divider()
+            suggestions = detailed_ats_suggestions(cv_ats, result["cv_md"])
+            for s in suggestions:
+                status_color = {"good": "#28a745", "warn": "#fd7e14", "bad": "#dc3545"}[s["status"]]
+                pct = int(s["score"] / s["max"] * 100) if s["max"] else 0
+                st.markdown(
+                    f"<div class='ats-row' style='margin-bottom:10px;'>"
+                    f"<div style='min-width:130px;font-weight:600;font-size:0.9em;'>{s['category']}</div>"
+                    f"<div style='flex:1;'>"
+                    f"<div style='background:#333;border-radius:4px;height:6px;margin-bottom:4px;'>"
+                    f"<div style='background:{status_color};width:{pct}%;height:6px;border-radius:4px;'></div></div>"
+                    f"<span style='font-size:0.82em;color:#aaa;'>{s['fix']}</span>"
+                    f"</div>"
+                    f"<div style='min-width:52px;text-align:right;font-size:0.88em;color:{status_color};font-weight:700;'>"
+                    f"{s['score']}/{s['max']}</div>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+
+        st.divider()
+        pdf_data = result.get("pdf_bytes")
+        dl1, dl2 = st.columns(2)
+        dl1.download_button(
+            "⬇ Download PDF",
+            data=pdf_data or b"",
+            file_name="tailored_cv.pdf",
+            mime="application/pdf",
+            use_container_width=True,
+            disabled=pdf_data is None,
+        )
+        dl2.download_button(
+            "⬇ Download Markdown",
+            data=result["cv_md"],
+            file_name="tailored_cv.md",
+            mime="text/markdown",
+            use_container_width=True,
+        )
 
 
 # ══════════════════════════════════════════════════════════════════════════════

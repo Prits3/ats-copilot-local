@@ -8,3 +8,6 @@ numpy
 chromadb
 faiss-cpu
 reportlab
+fastapi
+uvicorn[standard]
+python-multipart

@@ -253,4 +253,25 @@ def sanitize_profile(profile: dict) -> dict:
     # Drop completely empty roles
     profile["roles"] = [r for r in profile.get("roles", []) if r.get("title") or r.get("company")]
 
+    # Drop garbage roles: generic fallback title with no real company
+    def _is_garbage_role(role: dict) -> bool:
+        title = (role.get("title") or "").strip().lower()
+        company = (role.get("company") or "").strip()
+        if title in {"professional experience", "work experience", "experience"} and not company:
+            return True
+        # Role where bullets contain email addresses (contact info leaked in)
+        bullets = role.get("bullets", [])
+        if bullets and all("@" in b or re.match(r"^[\+\d]", b) for b in bullets):
+            return True
+        return False
+
+    profile["roles"] = [r for r in profile.get("roles", []) if not _is_garbage_role(r)]
+
+    # Strip bullets that are clearly contact info
+    for role in profile.get("roles", []):
+        role["bullets"] = [
+            b for b in role.get("bullets", [])
+            if "@" not in b and not re.match(r"^[\+\d\(\)\s\-\.]{7,}$", b)
+        ]
+
     return profile
