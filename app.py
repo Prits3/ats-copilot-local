@@ -13,15 +13,6 @@ load_dotenv(dotenv_path=os.path.join(os.path.dirname(os.path.abspath(__file__)),
 import pandas as pd
 import streamlit as st
 
-# Load Streamlit Cloud secrets into os.environ so the rest of the code
-# (which uses os.environ) works both locally and on Streamlit Cloud.
-try:
-    for _k, _v in st.secrets.items():
-        if isinstance(_v, str) and _v:
-            os.environ[_k] = _v
-except Exception:
-    pass
-
 from bullet_rewriter import generate_positioning_summary, holistic_cv_rewrite, rewrite_experience_bullets
 from cv_advisor import ats_score, detailed_ats_suggestions, interpret_ats_score, missing_skills
 from cv_generator import generate_cv_markdown, generate_pdf_bytes
@@ -147,7 +138,18 @@ def _empty_project() -> dict:
     return {"name": "", "description": "", "bullets": "", "skills": "", "url": ""}
 
 
+def _load_cloud_secrets() -> None:
+    """Copy Streamlit Cloud secrets into os.environ (safe to call at runtime)."""
+    try:
+        for _k, _v in st.secrets.items():
+            if isinstance(_v, str) and _v:
+                os.environ[_k] = _v
+    except Exception:
+        pass
+
+
 def _init_state() -> None:
+    _load_cloud_secrets()
     defaults: dict = {
         "mode": None,           # None | "create" | "tailor" | "scan"
         # Shared
